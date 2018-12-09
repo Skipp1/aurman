@@ -1,0 +1,229 @@
+#! /usr/bin/env bash
+
+##set of colours
+CLA='\e[0m'
+RED='\e[1;31m'
+GRE='\e[1;32m'
+YEL='\e[1;33m'
+BLU='\e[1;34m'
+PUR='\e[1;35m'
+CYA='\e[1;36m'
+WHI='\e[1;37m'
+
+function integr() {
+	for file in ./*; do
+		if [ "$file" == "./PKGBUILD" ]; then 
+			cat $file
+			echo -e "${RED}does this look make an makepkg file?${YEL} <y/n>${CLA}"
+			read val
+				if [ $val != "y" ]; then 
+					return 1
+				fi
+		elif [ "$(echo $file | grep install)" ]; then 
+			cat $file
+			echo -e "${RED}does this look make an install file?${YEL} <y/n>${CLA}"
+			read val
+				if [ $val != "y" ]; then 
+					return 1
+				fi
+		elif [ "$(echo $file | grep install)" ]; then
+			cat $file
+			echo -e "${RED}does this look make an install file?${YEL} <y/n>${CLA}"
+			read val
+				if [ $val != "y" ]; then 
+					return 1
+				fi
+		fi
+	done 
+	val=0
+	return 0
+}
+
+function instnow() {
+	if [ $1 == "0" ]; then 
+		echo -e "${WHI}Do you want me to install now? ${BLU}<${GRE}y${BLU}/${RED}n${BLU}/${PUR}d${BLU}>${CLA}"
+		read val < /dev/tty
+		if [ "$val" == "y" ]; then
+			sudo pacman -U *.pkg.tar.xz
+		elif [ "$val" = "d" ]; then 
+			sudo pacman -U --asdeps *.pkg.tar.xz 
+		else 
+			echo please run with -i to install
+		fi
+	elif [ $1 == "1" ]; then 
+		echo -e "${WHI}Do you want me to install now? ${BLU}<${GRE}y${BLU}/${RED}n${BLU}>${CLA}"
+		read val < /dev/tty
+		if [ "$val" == "y" ]; then
+			sudo pacman -U *.pkg.tar.xz 
+		else 
+			echo "${WHI}please run with -i to install${CLA}"
+		fi
+	fi
+	val=0
+	return 0
+}
+
+function makei() {
+	cd ~/Programs
+	bval=$(echo $1 | tr -d "/")
+	if [ $(curl -o /dev/null --silent --head --write-out '%{http_code}\n' https://aur.archlinux.org/packages/$bval) == "200" ]; then
+		echo cloning...
+		git clone https://aur.archlinux.org/$bval.git
+		cd $bval
+		integr
+		if [ "$val" == "0" ]; then
+			cat PKGBUILD | tr '\n' ' ' | tr ')' '\n' | grep depends | grep -v makedepends | grep -v optdepends | sed 's/\x27[^ ]*\x27/\n&\n/g' | grep \' | sed 's/\x27//g' | tr ' ' '\n' > depies.txt 
+			k="0"
+			FILE=depies.txt
+			while read CMD; do 
+				if [ "$(pacman -Slq | grep "^$CMD$")" != "$CMD" ]; then  
+					if [ "$(pacman -Qmq | grep "^$CMD$")" != "$CMD" ]; then 
+						echo "${WHI}$CMD may need to be installed from the aur${CLA}"
+						k="1"
+						echo $CMD >> depies2.txt
+					fi
+				fi
+			done < $FILE
+			rm depies.txt
+			if [ $k == "1" ]; then
+				echo -e "${WHI}Do you want to install these packages from the aur now? ${BLU}<${GRE}y${BLU}/${RED}n${BLU}>${CLA}"
+				read val
+				if [[ $val == "y" ]]; then 
+					val=0
+					FILE=depies2.txt
+					while IFS= read -r CMD; do 
+						(makei "$CMD" "1"; cd ~/Programs/$bval) < /dev/tty
+					done < "$FILE" 
+				fi
+			fi
+			makepkg -frsc
+			if [ $2 ]; then
+				instnow "1" 
+			else 
+				instnow "0"
+			fi
+			date +%Y-%m-%d\ %H:%0M > lastupdate.txt
+		else
+			echo "${RED}not making!${CLA}"
+		fi
+	else
+		echo "${RED}Package not found${CLA}"
+		return 1
+	fi
+	return 0
+}
+
+aflag=
+bflag=
+cflag=
+dflag=
+eflag=
+depflag=
+while getopts u:m:i:s:cd name
+do
+	case $name in
+	u)    aflag=1
+	      aval="$OPTARG";;
+	m)    bflag=1
+	      bval="$OPTARG";;
+	i)    cflag=1
+	      cval="$OPTARG";;
+	s)    dflag=1
+	      dval="$OPTARG";;
+	c)    eflag=1;;
+	d)    dflag=1;;
+	?)    printf "Usage: %s: [-u upgrade] [-m make] [-i install] [-s search] [-c check]\n" $0
+	exit 2;;
+esac
+done
+if [ "$aflag" ]; then
+	cd ~/Programs
+	aval=$(echo $aval | tr -d "/")
+	cd $aval
+	if [ $(curl -o /dev/null --silent --head --write-out '%{http_code}\n' https://aur.archlinux.org/packages/$aval) == "200" ]; then
+		curl -s -o out.txt https://aur.archlinux.org/packages/$aval
+		if [ "$(grep "Package Details" out.txt | sed 's/<h2>Package Details: //g' | sed 's/<\/h2.//g' | sed 's/-[0-9]//g' )" == "$(echo $aval $(grep "pkgver=" "PKGBUILD" | head -n 1 | sed 's/pkgver=//g'))" ]; then
+			echo you may not need to update!
+			echo -e "${WHI}Do you still want to continue? ${BLU}<${GRE}y${BLU}/${RED}n${BLU}>${CLA}"
+			read val < /dev/tty
+			if [ "$val" == "y" ]; then
+				git add -A 
+				git commit -m "$(date)"
+				git pull
+				integr
+				if [ "$val" == "0" ]; then
+					rm *.pkg.tar.xz
+					makepkg -frsc
+					instnow "0"
+					date +%Y-%m-%d\ %H:%0M > lastupdate.txt
+				else 
+					echo not upgrading!
+				fi
+			fi
+		else
+			git add -A 
+			git commit -m "$(date)"
+			git pull
+			integr
+			if [ "$val" == "0" ]; then
+				rm *.pkg.tar.xz
+				makepkg -frsc
+				instnow "0"
+				date +%Y-%m-%d\ %H:%0M > lastupdate.txt
+			else 
+				echo -e "${RED}not upgrading!${CLA}"
+			fi
+		fi
+		rm out.txt
+
+	else
+		echo -e "${RED}package not found!${CLA}"
+	fi
+fi
+if [ "$bflag" ]; then
+	makei "$bval" "$depflag"
+fi
+if [ "$cflag" ]; then
+	cd ~/Programs
+	echo installing...
+	if [ "$cval" ]; then
+		cd $cval
+		instnow
+	else
+		echo -e "${RED}please specify a pkg to install${CLA}"
+	fi
+fi
+if [ "$dflag" ]; then
+	cd ~/Programs
+	echo searching...
+	curl -s -o out.txt "https://aur.archlinux.org/packages/?O=0&K=$dval&PP=250"
+	tail -n +70 out.txt > out2.txt
+	mv out2.txt out.txt
+	FILE=out.txt
+	while read CMD; do
+		echo $CMD | awk '/<a href.*<\/a/' | grep -v "K=" | sed 's/<td.*">//g' | sed 's/<\/a><\/td>//g' | grep -v -e "<li>" -e "<p>"
+		echo "    " $CMD | awk '/wrap\">.*<\/td/' | sed 's/<td class=\"wrap\">//g' | sed 's/<\/td>//g'|  grep -v -e "<li>" -e "<p>"
+	done < $FILE
+	rm out.txt
+fi
+if [ "$eflag" ]; then
+	for i in *; do
+		if [ $i != "aur" ]; then 
+			b=" "
+			cd $i
+			curl -s -o out.txt https://aur.archlinux.org/packages/$i
+			j=$(echo $(grep -A 1 "Last Updated" out.txt | grep "<td>" | sed 's/\t\t<td>//g' | sed 's/<\/td>//g'))
+			o=$(echo $(grep "Package Details" out.txt | sed 's/<h2>Package Details: //g' | sed 's/<\/h2.//g' | sed 's/-[0-9]//g' ))
+			p=$(echo $i $(grep "pkgver=" "PKGBUILD" | head -n 1 | sed 's/pkgver=//g'))
+			if [ "$o" == "$p" ]; then
+				printf  "%40.40s 	 	last aur change: %s 	%s\n" "$i" "$j" "$o" 
+				printf  "%40.40s 		last build time: %s 	%s\n \n" "$b" "$(cat lastupdate.txt 2>/dev/null)" "$p"
+			else 
+				printf  "%40.40s 	${RED}update${CLA}	last aur change: %s 	%s\n" "$i" "$j" "$o"
+				printf  "%40.40s		last build time: %s 	%s\n \n" "$b" "$(cat lastupdate.txt 2>/dev/null)" "$p"
+			fi
+			rm out.txt
+			cd ..
+		fi
+	done
+fi
